@@ -23,14 +23,23 @@ _cache = get_cache()
 def convert_ticker_to_akshare_format(ticker: str) -> str:
     """将标准股票代码转换为akshare格式的代码"""
     # 移除可能的市场后缀
-    ticker = ticker.split('.')[0]
+    if '.' in ticker:
+        parts = ticker.split('.')
+        code = parts[0]
+        if len(parts) > 1 and parts[1].upper() in ['SH', 'SS']:
+            return f"sh{code}"
+        elif len(parts) > 1 and parts[1].upper() in ['SZ']:
+            return f"sz{code}"
+        elif len(parts) > 1 and parts[1].upper() in ['BJ']:
+            return f"bj{code}"
+    else:
+        code = ticker.strip()
     
     # 检查是否已经是akshare格式
-    if ticker.startswith('sh') or ticker.startswith('sz'):
+    if ticker.startswith(('sh', 'sz', 'bj')):
         return ticker
     
     # 根据代码判断市场
-    code = ticker.strip()
     if code.startswith('6'):
         return f"sh{code}"
     elif code.startswith(('0', '3')):
@@ -48,7 +57,8 @@ def convert_date_format(date_str: str) -> str:
 def get_a_stock_prices(ticker: str, start_date: str, end_date: str) -> list[Price]:
     """获取A股价格数据"""
     # 检查缓存
-    if cached_data := _cache.get_prices(f"A_{ticker}"):
+    cache_key = f"A_{ticker}"
+    if cached_data := _cache.get_prices(cache_key):
         # 按日期范围过滤并转换为Price对象
         filtered_data = [Price(**price) for price in cached_data if start_date <= price["time"] <= end_date]
         if filtered_data:
@@ -58,40 +68,106 @@ def get_a_stock_prices(ticker: str, start_date: str, end_date: str) -> list[Pric
     ak_ticker = convert_ticker_to_akshare_format(ticker)
     
     try:
-        # 使用akshare获取股票历史数据
-        stock_data = ak.stock_zh_a_hist(
-            symbol=ak_ticker,
-            start_date=start_date,
-            end_date=end_date,
-            adjust="qfq"  # 前复权
-        )
+        # 尝试多种方式获取历史数据
+        stock_data = None
+        error_msg = ""
+        
+        # 方法1: 使用stock_zh_a_hist
+        try:
+            print(f"尝试使用stock_zh_a_hist获取 {ak_ticker} 的数据")
+            stock_data = ak.stock_zh_a_hist(
+                symbol=ak_ticker,
+                start_date=start_date,
+                end_date=end_date,
+                adjust="qfq"  # 前复权
+            )
+        except Exception as e:
+            error_msg += f"方法1失败: {str(e)}; "
+            
+        # 如果第一种方法失败，尝试其他方法
+        if stock_data is None or stock_data.empty:
+            try:
+                # 方法2: 尝试不同的格式
+                print(f"尝试替代格式获取 {ticker} 的数据")
+                # 去除市场前缀
+                pure_code = ak_ticker[2:] if ak_ticker.startswith(('sh', 'sz', 'bj')) else ak_ticker
+                stock_data = ak.stock_zh_a_hist(
+                    symbol=pure_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust="qfq"
+                )
+            except Exception as e:
+                error_msg += f"方法2失败: {str(e)}; "
+                
+        # 如果仍然失败，尝试其他API
+        if stock_data is None or stock_data.empty:
+            try:
+                # 方法3: 使用daily数据
+                print(f"尝试使用stock_zh_a_daily获取 {ticker} 的数据")
+                stock_data = ak.stock_zh_a_daily(symbol=ak_ticker, start_date=start_date, end_date=end_date)
+            except Exception as e:
+                error_msg += f"方法3失败: {str(e)}; "
         
         # 检查是否有数据
-        if stock_data.empty:
+        if stock_data is None or stock_data.empty:
+            print(f"无法获取 {ticker} 的价格数据: {error_msg}")
+            return []
+        
+        # 检查数据格式，标准化列名
+        column_mapping = {
+            '日期': 'date', '开盘': 'open', '收盘': 'close', 
+            '最高': 'high', '最低': 'low', '成交量': 'volume',
+            'open': 'open', 'close': 'close', 'high': 'high', 
+            'low': 'low', 'volume': 'volume', 'date': 'date'
+        }
+        
+        # 重命名列，使其标准化
+        stock_data_columns = stock_data.columns.tolist()
+        rename_dict = {}
+        for col in stock_data_columns:
+            if col in column_mapping:
+                rename_dict[col] = column_mapping[col]
+        
+        if rename_dict:
+            stock_data = stock_data.rename(columns=rename_dict)
+        
+        # 确保数据包含所需列
+        required_cols = ['date', 'open', 'close', 'high', 'low', 'volume']
+        missing_cols = [col for col in required_cols if col not in stock_data.columns]
+        
+        if missing_cols:
+            print(f"数据缺少必要的列: {missing_cols}")
             return []
         
         # 转换为Price对象列表
         prices = []
         for _, row in stock_data.iterrows():
-            date_str = row['日期']
+            date_str = row['date']
             if isinstance(date_str, str):
-                date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-                date_formatted = date_obj.strftime('%Y-%m-%d')
+                date_formatted = date_str
             else:
                 date_formatted = date_str.strftime('%Y-%m-%d')
                 
-            price = Price(
-                open=float(row['开盘']),
-                close=float(row['收盘']),
-                high=float(row['最高']),
-                low=float(row['最低']),
-                volume=int(row['成交量']),
-                time=date_formatted
-            )
-            prices.append(price)
+            # 确保所有值都是数值类型
+            try:
+                price = Price(
+                    open=float(row['open']),
+                    close=float(row['close']),
+                    high=float(row['high']),
+                    low=float(row['low']),
+                    volume=int(float(row['volume'])),
+                    time=date_formatted
+                )
+                prices.append(price)
+            except (ValueError, TypeError) as e:
+                print(f"数据转换错误: {e}, 行数据: {row}")
+                continue
             
         # 缓存结果
-        _cache.set_prices(f"A_{ticker}", [p.model_dump() for p in prices])
+        if prices:
+            _cache.set_prices(cache_key, [p.model_dump() for p in prices])
+            
         return prices
         
     except Exception as e:
@@ -312,34 +388,99 @@ def get_a_stock_market_cap(
     """获取A股市值数据"""
     # 转换为akshare格式
     ak_ticker = convert_ticker_to_akshare_format(ticker)
+    pure_code = ak_ticker[2:] if ak_ticker.startswith(('sh', 'sz', 'bj')) else ak_ticker
     
     try:
-        # 获取当前行情数据
-        stock_data = ak.stock_zh_a_spot()
+        # 尝试多种方式获取市值数据
         
-        # 查找对应的股票
-        ticker_row = stock_data[stock_data['代码'] == ak_ticker[2:]]
-        if ticker_row.empty:
-            # 如果找不到，尝试获取历史数据
-            hist_data = get_a_stock_prices(ticker, end_date, end_date)
-            if hist_data:
-                # 使用收盘价和流通股本估算市值
-                stock_info = ak.stock_individual_info_em(symbol=ak_ticker[2:])
-                circulating_shares = None
-                for _, row in stock_info.iterrows():
-                    if row['item'] == '流通股本(亿)':
-                        circulating_shares = float(row['value']) * 100000000
-                        break
-                
-                if circulating_shares:
-                    return hist_data[0].close * circulating_shares
-                
-            return None
+        # 方法1: 使用实时行情数据
+        try:
+            print(f"尝试获取 {ticker} 的市值数据 (方法1)")
+            stock_data = ak.stock_zh_a_spot()
             
-        # 获取市值（以亿为单位，转换为具体数值）
-        if '总市值' in ticker_row.columns:
-            return float(ticker_row['总市值'].iloc[0]) * 100000000  # 转换为具体数值
+            # 尝试多种可能的代码格式查找
+            for code_format in [pure_code, ak_ticker]:
+                ticker_row = stock_data[stock_data['代码'] == code_format]
+                if not ticker_row.empty:
+                    # 检查是否有市值相关列
+                    market_cap_col = None
+                    for col in ticker_row.columns:
+                        if '总市值' in col or '市值' in col:
+                            market_cap_col = col
+                            break
+                    
+                    if market_cap_col and not pd.isna(ticker_row[market_cap_col].iloc[0]):
+                        # 解析市值数据（可能有单位如"亿"）
+                        market_cap_str = str(ticker_row[market_cap_col].iloc[0])
+                        if '亿' in market_cap_str:
+                            return float(market_cap_str.replace('亿', '')) * 100000000
+                        elif '万' in market_cap_str:
+                            return float(market_cap_str.replace('万', '')) * 10000
+                        else:
+                            return float(market_cap_str)
+        except Exception as e:
+            print(f"方法1获取市值失败: {e}")
         
+        # 方法2: 使用公司信息接口估算市值
+        try:
+            print(f"尝试获取 {ticker} 的市值数据 (方法2)")
+            # 获取股票信息
+            stock_info = ak.stock_individual_info_em(symbol=pure_code)
+            
+            # 查找总股本和股价数据
+            total_shares = None
+            price = None
+            
+            for _, row in stock_info.iterrows():
+                item = row.get('item', '')
+                value = row.get('value', '')
+                
+                if '总股本' in item or '股本' in item:
+                    # 提取股本数据
+                    if '亿' in str(value):
+                        total_shares = float(str(value).replace('亿', '')) * 100000000
+                    elif '万' in str(value):
+                        total_shares = float(str(value).replace('万', '')) * 10000
+                    else:
+                        total_shares = float(value)
+                
+                if '股价' in item or '现价' in item:
+                    price = float(value)
+            
+            # 如果缺少股价，尝试获取当前价格
+            if total_shares and not price:
+                hist_data = get_a_stock_prices(ticker, end_date, end_date)
+                if hist_data:
+                    price = hist_data[0].close
+            
+            # 如果有总股本和股价，计算市值
+            if total_shares and price:
+                return total_shares * price
+        except Exception as e:
+            print(f"方法2获取市值失败: {e}")
+        
+        # 方法3: 使用交易所公布的市值数据
+        try:
+            print(f"尝试获取 {ticker} 的市值数据 (方法3)")
+            if pure_code.startswith('6'):
+                # 上交所
+                stock_info = ak.stock_sh_summary()
+            else:
+                # 深交所
+                stock_info = ak.stock_sz_summary()
+                
+            ticker_row = stock_info[stock_info['代码'] == pure_code]
+            if not ticker_row.empty:
+                # 查找市值列
+                for col in ticker_row.columns:
+                    if '市值' in col or '总市值' in col:
+                        if not pd.isna(ticker_row[col].iloc[0]):
+                            return float(ticker_row[col].iloc[0])
+        except Exception as e:
+            print(f"方法3获取市值失败: {e}")
+            
+        # 如果上述方法都失败，返回None
+        print(f"无法获取 {ticker} 的市值数据")
         return None
         
     except Exception as e:
