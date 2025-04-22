@@ -13,6 +13,7 @@ from agents.technicals import technical_analyst_agent
 from agents.risk_manager import risk_management_agent
 from agents.sentiment import sentiment_agent
 from agents.warren_buffett import warren_buffett_agent
+from agents.china_market import china_market_agent
 from graph.state import AgentState
 from agents.valuation import valuation_agent
 from utils.display import print_trading_output

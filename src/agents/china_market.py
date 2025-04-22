@@ -132,22 +132,60 @@ def get_restricted_shares_info(ticker: str, end_date: str) -> dict:
         else:
             code = ticker
             
-        # 获取限售股解禁数据
-        restricted_data = ak.stock_restricted_shares()
+        # 尝试多个可能的函数获取限售股解禁数据
+        try:
+            # 尝试使用新版API
+            restricted_data = ak.stock_restricted_release_date_sina()
+        except:
+            try:
+                # 尝试使用可能的替代API
+                restricted_data = ak.stock_share_unlock_cninfo()
+            except:
+                # 如果都失败，返回无数据信息
+                return {
+                    "has_upcoming_release": False,
+                    "details": "无法获取限售股解禁数据，API可能已更改"
+                }
         
         # 过滤当前股票的数据
-        stock_data = restricted_data[restricted_data['代码'] == code]
+        # 根据实际数据格式调整列名
+        code_column = None
+        for col in restricted_data.columns:
+            if '代码' in col or 'code' in col.lower():
+                code_column = col
+                break
+                
+        if not code_column:
+            return {
+                "has_upcoming_release": False,
+                "details": "限售股数据格式不兼容"
+            }
+            
+        stock_data = restricted_data[restricted_data[code_column] == code]
         if stock_data.empty:
             return {
                 "has_upcoming_release": False,
                 "details": "近期无限售股解禁"
             }
             
+        # 查找日期列
+        date_column = None
+        for col in stock_data.columns:
+            if '日期' in col or 'date' in col.lower():
+                date_column = col
+                break
+                
+        if not date_column:
+            return {
+                "has_upcoming_release": False,
+                "details": "限售股数据格式不兼容"
+            }
+            
         # 按日期排序并获取最近的解禁数据
-        stock_data = stock_data.sort_values('解禁日期')
+        stock_data = stock_data.sort_values(date_column)
         
         # 检查是否有即将到来的解禁
-        upcoming_releases = stock_data[stock_data['解禁日期'] > end_date]
+        upcoming_releases = stock_data[stock_data[date_column] > end_date]
         if upcoming_releases.empty:
             return {
                 "has_upcoming_release": False,
@@ -157,13 +195,41 @@ def get_restricted_shares_info(ticker: str, end_date: str) -> dict:
         # 获取最近的解禁信息
         next_release = upcoming_releases.iloc[0]
         
-        return {
+        # 查找比例和数量列
+        ratio_column = None
+        amount_column = None
+        for col in next_release.index:
+            if '比例' in col or 'ratio' in col.lower():
+                ratio_column = col
+            elif '数量' in col or 'amount' in col.lower():
+                amount_column = col
+        
+        # 构建返回数据
+        result = {
             "has_upcoming_release": True,
-            "release_date": next_release['解禁日期'],
-            "release_ratio": float(next_release['解禁比例'].replace('%', '')) / 100 if '解禁比例' in next_release else None,
-            "release_amount": float(next_release['解禁数量(亿)']) * 100000000 if '解禁数量(亿)' in next_release else None,
-            "details": f"即将于{next_release['解禁日期']}解禁，占比{next_release['解禁比例']}"
+            "release_date": next_release[date_column],
+            "details": f"即将于{next_release[date_column]}解禁"
         }
+        
+        # 添加比例信息（如果存在）
+        if ratio_column and not pd.isna(next_release[ratio_column]):
+            ratio_value = next_release[ratio_column]
+            # 尝试处理可能的格式，如"10.5%"
+            if isinstance(ratio_value, str) and '%' in ratio_value:
+                ratio_value = float(ratio_value.replace('%', '')) / 100
+            result["release_ratio"] = ratio_value
+            result["details"] += f"，占比{next_release[ratio_column]}"
+            
+        # 添加数量信息（如果存在）
+        if amount_column and not pd.isna(next_release[amount_column]):
+            amount_value = next_release[amount_column]
+            # 如果是亿为单位，转换为具体数值
+            if '亿' in str(amount_column):
+                amount_value = float(amount_value) * 100000000
+            result["release_amount"] = amount_value
+            
+        return result
+        
     except Exception as e:
         print(f"获取限售股解禁数据错误 ({ticker}): {e}")
         return {
@@ -181,34 +247,101 @@ def get_sector_info(ticker: str) -> dict:
         else:
             code = ticker
             
-        # 获取个股信息
-        stock_info = ak.stock_individual_info_em(symbol=code)
+        # 尝试多种方式获取个股信息
+        stock_info = None
+        try:
+            # 首先尝试使用个股信息接口
+            stock_info = ak.stock_individual_info_em(symbol=code)
+        except:
+            try:
+                # 尝试使用替代接口
+                stock_info = ak.stock_profile_cninfo(symbol=code)
+            except:
+                pass
+                
+        # 如果无法获取股票信息
+        if stock_info is None or stock_info.empty:
+            # 尝试获取行业分类数据
+            try:
+                industry_data = ak.stock_sector_spot()
+                # 查找包含该股票代码的行
+                for col in industry_data.columns:
+                    if '成分' in col or '股票' in col:
+                        matched_rows = industry_data[industry_data[col].str.contains(code, na=False)]
+                        if not matched_rows.empty:
+                            return {
+                                "industry": matched_rows.iloc[0]['行业名称'] if '行业名称' in matched_rows.columns else None,
+                                "board": None,
+                                "sector": matched_rows.iloc[0]['板块名称'] if '板块名称' in matched_rows.columns else None,
+                                "details": f"行业数据通过板块信息获取"
+                            }
+            except:
+                # 如果所有方法都失败，返回缺少数据信息
+                return {
+                    "industry": None,
+                    "board": None,
+                    "sector": None,
+                    "details": "无法获取行业数据"
+                }
+                
+            return {
+                "industry": None,
+                "board": None,
+                "sector": None,
+                "details": "无法获取行业数据"
+            }
         
         # 提取行业和板块信息
         sector = None
         industry = None
         board = None
         
+        # 检查不同的可能列名
         for _, row in stock_info.iterrows():
-            if row['item'] == '行业':
-                industry = row['value']
-            elif row['item'] == '板块':
-                board = row['value']
-            elif row['item'] == '概念':
-                sector = row['value']
+            item_name = row.get('item', row.get('指标', ''))
+            value = row.get('value', row.get('数值', ''))
+            
+            if item_name in ['行业', '所属行业']:
+                industry = value
+            elif item_name in ['板块', '所属板块']:
+                board = value
+            elif item_name in ['概念', '概念板块']:
+                sector = value
                 
         # 获取行业整体表现
+        industry_perf = None
         try:
-            industry_perf = None
             if industry:
-                industry_data = ak.stock_sector_detail(sector=industry)
-                if not industry_data.empty:
-                    avg_change = industry_data['涨跌幅'].astype(float).mean()
-                    industry_perf = {
-                        "average_change": avg_change,
-                        "rank": "strong" if avg_change > 2 else "weak" if avg_change < -2 else "neutral"
-                    }
-        except:
+                try:
+                    # 尝试使用行业板块详情接口
+                    industry_data = ak.stock_sector_detail(sector=industry)
+                except:
+                    try:
+                        # 尝试使用替代接口
+                        industry_data = ak.stock_board_industry_name_em()
+                        industry_row = industry_data[industry_data['板块名称'].str.contains(industry, na=False)]
+                        if not industry_row.empty:
+                            board_code = industry_row.iloc[0]['板块代码']
+                            industry_data = ak.stock_board_industry_cons_em(symbol=board_code)
+                    except:
+                        industry_data = None
+                
+                if industry_data is not None and not industry_data.empty:
+                    # 找到包含涨跌幅的列
+                    change_column = None
+                    for col in industry_data.columns:
+                        if '涨跌幅' in col or '涨幅' in col:
+                            change_column = col
+                            break
+                    
+                    if change_column:
+                        avg_change = industry_data[change_column].astype(float).mean()
+                        industry_perf = {
+                            "average_change": avg_change,
+                            "rank": "strong" if avg_change > 2 else "weak" if avg_change < -2 else "neutral"
+                        }
+        except Exception as e:
+            print(f"获取行业表现数据错误: {e}")
             industry_perf = None
             
         return {
@@ -216,7 +349,7 @@ def get_sector_info(ticker: str) -> dict:
             "board": board,
             "sector": sector,
             "industry_performance": industry_perf,
-            "details": f"行业: {industry}, 板块: {board}, 概念: {sector}"
+            "details": f"行业: {industry or '未知'}, 板块: {board or '未知'}, 概念: {sector or '未知'}"
         }
     except Exception as e:
         print(f"获取板块行业数据错误 ({ticker}): {e}")
@@ -234,11 +367,38 @@ def get_margin_trading_data(ticker: str, end_date: str) -> dict:
         # 转换为纯数字代码格式
         if ticker.startswith(('sh', 'sz')):
             code = ticker[2:]
+            market = ticker[:2]
         else:
             code = ticker
+            # 根据代码判断可能的市场
+            if code.startswith('6'):
+                market = 'sh'
+            else:
+                market = 'sz'
             
-        # 获取融资融券数据
-        margin_data = ak.stock_margin_detail_em(symbol=code)
+        # 根据市场选择不同的API函数
+        try:
+            if market == 'sz':
+                # 深市融资融券
+                margin_data = ak.stock_margin_sz_detail_em(symbol=code)
+            else:
+                # 沪市融资融券
+                margin_data = ak.stock_margin_sh_detail_em(symbol=code)
+        except:
+            # 尝试使用通用接口
+            try:
+                margin_data = ak.stock_margin_detail_em(symbol=code)
+            except:
+                # 如果以上方法都失败，尝试其他可能的函数
+                try:
+                    # 最近的融资融券统计数据
+                    margin_data = ak.stock_margin_underlying_info_szse(date=end_date[:7])
+                    margin_data = margin_data[margin_data['证券代码'] == code]
+                except:
+                    return {
+                        "has_margin_trading": False,
+                        "details": "无法获取融资融券数据，API可能已更改"
+                    }
         
         if margin_data.empty:
             return {
@@ -246,29 +406,76 @@ def get_margin_trading_data(ticker: str, end_date: str) -> dict:
                 "details": "无融资融券数据"
             }
             
-        # 按日期排序
-        margin_data = margin_data.sort_values('日期', ascending=False)
-        
+        # 查找日期列
+        date_column = None
+        for col in margin_data.columns:
+            if '日期' in col or 'date' in col.lower():
+                date_column = col
+                break
+                
+        if date_column:
+            # 按日期排序
+            margin_data = margin_data.sort_values(date_column, ascending=False)
+            
         # 获取最新数据
         latest_data = margin_data.iloc[0]
         
-        # 计算融资融券余额变化率
-        if len(margin_data) > 1:
-            previous_data = margin_data.iloc[1]
-            financing_change = (latest_data['融资余额'] - previous_data['融资余额']) / previous_data['融资余额']
-            margin_change = (latest_data['融券余额'] - previous_data['融券余额']) / previous_data['融券余额']
-        else:
-            financing_change = 0
-            margin_change = 0
-            
-        return {
+        # 查找融资融券余额列
+        financing_column = None
+        margin_column = None
+        for col in latest_data.index:
+            if '融资余额' in col:
+                financing_column = col
+            elif '融券余额' in col:
+                margin_column = col
+        
+        # 如果找不到精确匹配，尝试模糊匹配
+        if not financing_column:
+            for col in latest_data.index:
+                if '融资' in col:
+                    financing_column = col
+                    break
+        
+        if not margin_column:
+            for col in latest_data.index:
+                if '融券' in col:
+                    margin_column = col
+                    break
+        
+        result = {
             "has_margin_trading": True,
-            "financing_balance": latest_data['融资余额'],
-            "margin_balance": latest_data['融券余额'],
-            "financing_change": financing_change,
-            "margin_change": margin_change,
-            "details": f"融资余额: {latest_data['融资余额']}, 融券余额: {latest_data['融券余额']}"
+            "details": "获取到融资融券数据"
         }
+        
+        # 添加融资余额
+        if financing_column and not pd.isna(latest_data[financing_column]):
+            result["financing_balance"] = latest_data[financing_column]
+            result["details"] = f"融资余额: {latest_data[financing_column]}"
+            
+        # 添加融券余额
+        if margin_column and not pd.isna(latest_data[margin_column]):
+            result["margin_balance"] = latest_data[margin_column]
+            if "details" in result and result["details"] != "获取到融资融券数据":
+                result["details"] += f", 融券余额: {latest_data[margin_column]}"
+            else:
+                result["details"] = f"融券余额: {latest_data[margin_column]}"
+        
+        # 如果有多行数据，计算变化率
+        if len(margin_data) > 1 and financing_column and margin_column:
+            previous_data = margin_data.iloc[1]
+            
+            # 计算融资变化率
+            if not pd.isna(previous_data[financing_column]) and previous_data[financing_column] != 0:
+                financing_change = (latest_data[financing_column] - previous_data[financing_column]) / previous_data[financing_column]
+                result["financing_change"] = financing_change
+            
+            # 计算融券变化率
+            if not pd.isna(previous_data[margin_column]) and previous_data[margin_column] != 0:
+                margin_change = (latest_data[margin_column] - previous_data[margin_column]) / previous_data[margin_column]
+                result["margin_change"] = margin_change
+            
+        return result
+        
     except Exception as e:
         print(f"获取融资融券数据错误 ({ticker}): {e}")
         return {

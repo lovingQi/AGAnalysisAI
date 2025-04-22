@@ -3,7 +3,14 @@ from graph.state import AgentState, show_agent_reasoning
 from utils.progress import progress
 from tools.api import get_prices, prices_to_df
 import json
+import re
 
+# 添加A股API导入
+try:
+    from tools.akshare_api import get_a_stock_prices, a_stock_prices_to_df
+    AKSHARE_AVAILABLE = True
+except ImportError:
+    AKSHARE_AVAILABLE = False
 
 ##### Risk Management Agent #####
 def risk_management_agent(state: AgentState):
@@ -19,17 +26,42 @@ def risk_management_agent(state: AgentState):
     for ticker in tickers:
         progress.update_status("risk_management_agent", ticker, "Analyzing price data")
 
-        prices = get_prices(
-            ticker=ticker,
-            start_date=data["start_date"],
-            end_date=data["end_date"],
-        )
+        # 检查是否为A股代码
+        is_a_stock = is_chinese_stock(ticker)
+        
+        if is_a_stock and AKSHARE_AVAILABLE:
+            # 使用A股数据API
+            prices = get_a_stock_prices(
+                ticker=ticker,
+                start_date=data["start_date"],
+                end_date=data["end_date"],
+            )
+            if prices:
+                prices_df = a_stock_prices_to_df(prices)
+            else:
+                prices_df = None
+        else:
+            # 使用美股数据API
+            prices = get_prices(
+                ticker=ticker,
+                start_date=data["start_date"],
+                end_date=data["end_date"],
+            )
+            if prices:
+                prices_df = prices_to_df(prices)
+            else:
+                prices_df = None
 
-        if not prices:
+        if not prices_df or prices_df.empty:
             progress.update_status("risk_management_agent", ticker, "Failed: No price data found")
+            risk_analysis[ticker] = {
+                "remaining_position_limit": 0.0,
+                "current_price": 0.0,
+                "reasoning": {
+                    "error": "No price data available for this ticker"
+                },
+            }
             continue
-
-        prices_df = prices_to_df(prices)
 
         progress.update_status("risk_management_agent", ticker, "Calculating position limits")
 
@@ -81,3 +113,25 @@ def risk_management_agent(state: AgentState):
         "messages": state["messages"] + [message],
         "data": data,
     }
+
+def is_chinese_stock(ticker):
+    """
+    判断是否为中国股票代码
+    支持以下格式：
+    1. 以sh或sz开头: sh600000, sz000001
+    2. 6位数字开头为沪市，0或3开头为深市: 600000, 000001, 300059
+    3. 带后缀的代码: 600000.SH, 000001.SZ
+    """
+    # 检查是否以sh或sz开头
+    if ticker.startswith(('sh', 'sz', 'bj')):
+        return True
+    
+    # 检查是否为纯数字代码
+    if re.match(r'^[0-9]{6}$', ticker):
+        return True
+    
+    # 检查是否为带后缀的代码
+    if re.match(r'^[0-9]{6}\.(SH|SZ|BJ)$', ticker, re.IGNORECASE):
+        return True
+    
+    return False
