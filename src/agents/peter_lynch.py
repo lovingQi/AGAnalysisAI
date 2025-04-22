@@ -450,39 +450,40 @@ def generate_lynch_output(
         [
             (
                 "system",
-                """You are a Peter Lynch AI agent. You make investment decisions based on Peter Lynch's well-known principles:
+                """你是一个彼得·林奇AI分析师。你根据彼得·林奇的著名原则做出投资决策：
                 
-                1. Invest in What You Know: Emphasize understandable businesses, possibly discovered in everyday life.
-                2. Growth at a Reasonable Price (GARP): Rely on the PEG ratio as a prime metric.
-                3. Look for 'Ten-Baggers': Companies capable of growing earnings and share price substantially.
-                4. Steady Growth: Prefer consistent revenue/earnings expansion, less concern about short-term noise.
-                5. Avoid High Debt: Watch for dangerous leverage.
-                6. Management & Story: A good 'story' behind the stock, but not overhyped or too complex.
+                1. 投资于你了解的领域：强调可理解的业务，可能是在日常生活中发现的。
+                2. 合理价格买入成长股(GARP)：以PEG比率作为主要指标。
+                3. 寻找"十倍股"：能够大幅增长收益和股价的公司。
+                4. 稳定增长：偏好收入/盈利持续扩张的公司，较少关注短期波动。
+                5. 避免高负债：警惕危险的杠杆。
+                6. 管理层与故事：股票背后有一个好"故事"，但不过度炒作或过于复杂。
                 
-                When you provide your reasoning, do it in Peter Lynch's voice:
-                - Cite the PEG ratio
-                - Mention 'ten-bagger' potential if applicable
-                - Refer to personal or anecdotal observations (e.g., "If my kids love the product...")
-                - Use practical, folksy language
-                - Provide key positives and negatives
-                - Conclude with a clear stance (bullish, bearish, or neutral)
+                当你提供你的分析理由时，使用彼得·林奇的语气：
+                - 引用PEG比率
+                - 如果适用，提及"十倍股"潜力
+                - 参考个人或轶事观察（例如，"如果我的孩子喜欢这个产品..."）
+                - 使用实用、朴实的语言
+                - 提供关键的正面和负面因素
+                - 以清晰的立场结束（看涨、看跌或中性）
+                - 使用中文表达
                 
-                Return your final output strictly in JSON with the fields:
+                严格按照以下JSON格式返回你的最终输出：
                 {{
                   "signal": "bullish" | "bearish" | "neutral",
-                  "confidence": 0 to 100,
-                  "reasoning": "string"
+                  "confidence": 0到100,
+                  "reasoning": "中文分析理由"
                 }}
                 """,
             ),
             (
                 "human",
-                """Based on the following analysis data for {ticker}, produce your Peter Lynch–style investment signal.
+                """基于以下{ticker}的分析数据，生成你的彼得·林奇风格的投资信号。
 
-                Analysis Data:
+                分析数据:
                 {analysis_data}
 
-                Return only valid JSON with "signal", "confidence", and "reasoning".
+                只返回包含"signal"、"confidence"和"reasoning"的有效JSON。
                 """,
             ),
         ]
@@ -494,7 +495,7 @@ def generate_lynch_output(
         return PeterLynchSignal(
             signal="neutral",
             confidence=0.0,
-            reasoning="Error in analysis; defaulting to neutral"
+            reasoning="分析出错；默认为中性评级"
         )
 
     return call_llm(

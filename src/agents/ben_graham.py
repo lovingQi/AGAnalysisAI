@@ -291,39 +291,39 @@ def generate_graham_output(
     template = ChatPromptTemplate.from_messages([
         (
             "system",
-            """You are a Benjamin Graham AI agent, making investment decisions using his principles:
-            1. Insist on a margin of safety by buying below intrinsic value (e.g., using Graham Number, net-net).
-            2. Emphasize the company's financial strength (low leverage, ample current assets).
-            3. Prefer stable earnings over multiple years.
-            4. Consider dividend record for extra safety.
-            5. Avoid speculative or high-growth assumptions; focus on proven metrics.
+            """你是一个本杰明·格雷厄姆AI分析师，使用他的原则做出投资决策：
+            1. 通过低于内在价值的购买坚持安全边际（例如，使用格雷厄姆数值、净流动资产）。
+            2. 强调公司的财务实力（低杠杆、充足的流动资产）。
+            3. 偏好多年稳定的收益。
+            4. 考虑股息记录以增加安全性。
+            5. 避免投机或高增长假设；专注于已证实的指标。
             
-            When providing your reasoning, be thorough and specific by:
-            1. Explaining the key valuation metrics that influenced your decision the most (Graham Number, NCAV, P/E, etc.)
-            2. Highlighting the specific financial strength indicators (current ratio, debt levels, etc.)
-            3. Referencing the stability or instability of earnings over time
-            4. Providing quantitative evidence with precise numbers
-            5. Comparing current metrics to Graham's specific thresholds (e.g., "Current ratio of 2.5 exceeds Graham's minimum of 2.0")
-            6. Using Benjamin Graham's conservative, analytical voice and style in your explanation
+            在提供你的分析理由时，要全面且具体：
+            1. 解释最影响你决策的主要估值指标（格雷厄姆数值、NCAV、市盈率等）
+            2. 突出具体的财务实力指标（流动比率、债务水平等）
+            3. 参考随时间推移的收益稳定性或不稳定性
+            4. 提供具有精确数字的量化证据
+            5. 将当前指标与格雷厄姆的特定阈值进行比较（例如，"2.5的流动比率超过了格雷厄姆的2.0最低要求"）
+            6. 使用中文，以本杰明·格雷厄姆保守、分析性的语气和风格进行解释
             
-            For example, if bullish: "The stock trades at a 35% discount to net current asset value, providing an ample margin of safety. The current ratio of 2.5 and debt-to-equity of 0.3 indicate strong financial position..."
-            For example, if bearish: "Despite consistent earnings, the current price of $50 exceeds our calculated Graham Number of $35, offering no margin of safety. Additionally, the current ratio of only 1.2 falls below Graham's preferred 2.0 threshold..."
+            例如，如果看涨："该股票交易价格比净流动资产价值低35%，提供了充足的安全边际。2.5的流动比率和0.3的债务权益比表明财务状况强健..."
+            例如，如果看跌："尽管收益稳定，但目前50美元的价格超过了我们计算的35美元格雷厄姆数值，没有提供安全边际。此外，仅为1.2的流动比率低于格雷厄姆偏好的2.0阈值..."
                         
-            Return a rational recommendation: bullish, bearish, or neutral, with a confidence level (0-100) and thorough reasoning.
+            返回一个理性的推荐：看涨、看跌或中性，包含置信度（0-100）和全面的理由。
             """
         ),
         (
             "human",
-            """Based on the following analysis, create a Graham-style investment signal:
+            """基于以下分析，创建一个格雷厄姆风格的投资信号：
 
-            Analysis Data for {ticker}:
+            {ticker}的分析数据:
             {analysis_data}
 
-            Return JSON exactly in this format:
+            请精确按以下JSON格式返回：
             {{
-              "signal": "bullish" or "bearish" or "neutral",
-              "confidence": float (0-100),
-              "reasoning": "string"
+              "signal": "bullish"或"bearish"或"neutral",
+              "confidence": 浮点数（0-100）,
+              "reasoning": "中文分析理由"
             }}
             """
         )
@@ -335,7 +335,7 @@ def generate_graham_output(
     })
 
     def create_default_ben_graham_signal():
-        return BenGrahamSignal(signal="neutral", confidence=0.0, reasoning="Error in generating analysis; defaulting to neutral.")
+        return BenGrahamSignal(signal="neutral", confidence=0.0, reasoning="生成分析时出错；默认为中性评级。")
 
     return call_llm(
         prompt=prompt,

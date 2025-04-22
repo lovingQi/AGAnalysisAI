@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import requests
+import re
 
 from data.cache import get_cache
 from data.models import (
@@ -16,12 +17,57 @@ from data.models import (
     InsiderTradeResponse,
 )
 
+# 添加AkShare API导入
+try:
+    from tools.akshare_api import (
+        get_a_stock_prices, 
+        a_stock_prices_to_df, 
+        get_a_stock_market_cap,
+        get_a_stock_financial_metrics,
+        search_a_stock_line_items,
+        get_a_stock_news
+    )
+    AKSHARE_AVAILABLE = True
+except ImportError:
+    AKSHARE_AVAILABLE = False
+
 # Global cache instance
 _cache = get_cache()
 
 
+def is_chinese_stock(ticker: str) -> bool:
+    """
+    判断是否为中国股票代码
+    支持以下格式：
+    1. 以sh或sz开头: sh600000, sz000001
+    2. 6位数字开头为沪市，0或3开头为深市: 600000, 000001, 300059
+    3. 带后缀的代码: 600000.SH, 000001.SZ
+    """
+    # 检查是否以sh或sz开头
+    if ticker.startswith(('sh', 'sz', 'bj')):
+        return True
+    
+    # 检查是否为纯数字代码
+    if re.match(r'^[0-9]{6}$', ticker):
+        return True
+    
+    # 检查是否为带后缀的代码
+    if re.match(r'^[0-9]{6}\.(SH|SZ|BJ)$', ticker, re.IGNORECASE):
+        return True
+    
+    return False
+
+
 def get_prices(ticker: str, start_date: str, end_date: str) -> list[Price]:
     """Fetch price data from cache or API."""
+    # 检查是否为中国股票
+    is_a_share = is_chinese_stock(ticker)
+    
+    # 如果是A股且AkShare可用，使用A股价格获取函数
+    if is_a_share and AKSHARE_AVAILABLE:
+        return get_a_stock_prices(ticker, start_date, end_date)
+    
+    # 使用默认API
     # Check cache first
     if cached_data := _cache.get_prices(ticker):
         # Filter cached data by date range and convert to Price objects
@@ -58,6 +104,21 @@ def get_financial_metrics(
     limit: int = 10,
 ) -> list[FinancialMetrics]:
     """Fetch financial metrics from cache or API."""
+    # 检查是否为中国股票
+    is_a_share = is_chinese_stock(ticker)
+    
+    # 如果是A股且AkShare可用，使用A股API
+    if is_a_share and AKSHARE_AVAILABLE:
+        # 映射period参数
+        a_share_period = "年报"
+        if period == "quarterly":
+            a_share_period = "季报"
+        elif period == "ttm":
+            a_share_period = "年报"  # A股使用年报替代TTM
+        
+        return get_a_stock_financial_metrics(ticker, end_date, a_share_period, limit)
+    
+    # 使用默认API
     # Check cache first
     if cached_data := _cache.get_financial_metrics(ticker):
         # Filter cached data by date and limit
@@ -97,6 +158,21 @@ def search_line_items(
     limit: int = 10,
 ) -> list[LineItem]:
     """Fetch line items from API."""
+    # 检查是否为中国股票
+    is_a_share = is_chinese_stock(ticker)
+    
+    # 如果是A股且AkShare可用，使用A股API
+    if is_a_share and AKSHARE_AVAILABLE:
+        # 映射period参数
+        a_share_period = "年报"
+        if period == "quarterly":
+            a_share_period = "季报"
+        elif period == "ttm":
+            a_share_period = "年报"  # A股使用年报替代TTM
+        
+        return search_a_stock_line_items(ticker, line_items, end_date, a_share_period, limit)
+    
+    # 使用默认API
     # If not in cache or insufficient data, fetch from API
     headers = {}
     if api_key := os.environ.get("FINANCIAL_DATASETS_API_KEY"):
@@ -131,6 +207,15 @@ def get_insider_trades(
     limit: int = 1000,
 ) -> list[InsiderTrade]:
     """Fetch insider trades from cache or API."""
+    # 检查是否为中国股票
+    is_a_share = is_chinese_stock(ticker)
+    
+    # 如果是A股，目前暂不支持获取A股内部交易数据，返回空列表
+    if is_a_share:
+        print(f"暂不支持获取A股内部交易数据 ({ticker})")
+        return []
+    
+    # 使用默认API
     # Check cache first
     if cached_data := _cache.get_insider_trades(ticker):
         # Filter cached data by date range
@@ -194,6 +279,14 @@ def get_company_news(
     limit: int = 1000,
 ) -> list[CompanyNews]:
     """Fetch company news from cache or API."""
+    # 检查是否为中国股票
+    is_a_share = is_chinese_stock(ticker)
+    
+    # 如果是A股且AkShare可用，使用A股新闻获取函数
+    if is_a_share and AKSHARE_AVAILABLE:
+        return get_a_stock_news(ticker, end_date, start_date, limit)
+    
+    # 使用默认API
     # Check cache first
     if cached_data := _cache.get_company_news(ticker):
         # Filter cached data by date range
@@ -250,18 +343,24 @@ def get_company_news(
     return all_news
 
 
-
 def get_market_cap(
     ticker: str,
     end_date: str,
 ) -> float | None:
-    """Fetch market cap from the API."""
-    financial_metrics = get_financial_metrics(ticker, end_date)
-    market_cap = financial_metrics[0].market_cap
-    if not market_cap:
+    """Fetch market cap for a given ticker."""
+    # 检查是否为中国股票
+    is_a_share = is_chinese_stock(ticker)
+    
+    # 如果是A股且AkShare可用，使用A股市值获取函数
+    if is_a_share and AKSHARE_AVAILABLE:
+        return get_a_stock_market_cap(ticker, end_date)
+    
+    # 使用默认API
+    metrics = get_financial_metrics(ticker, end_date, period="ttm", limit=1)
+    if not metrics:
         return None
 
-    return market_cap
+    return metrics[0].market_cap
 
 
 def prices_to_df(prices: list[Price]) -> pd.DataFrame:
