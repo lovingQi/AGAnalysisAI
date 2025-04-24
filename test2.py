@@ -39,7 +39,7 @@ print("开始分析每只股票的买入信号...")
 # 由于可能是在非交易日运行，我们获取昨天的数据
 today = datetime.datetime.now()
 yesterday = today - datetime.timedelta(days=1)
-query_date = today.strftime("%Y-%m-%d")
+query_date = yesterday.strftime("%Y-%m-%d")
 
 # 计算技术指标
 def calculate_technical_indicators(df):
@@ -150,7 +150,7 @@ for code, name in zip(stock_codes, stock_names):
         continue
         
     # 加入适当的延时以避免请求过于频繁
-    time.sleep(0.5)
+    time.sleep(0.01)
 
 print("\n\n分析完成，开始汇总结果...")
 
