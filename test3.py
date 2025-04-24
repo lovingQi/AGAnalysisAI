@@ -24,13 +24,16 @@
 # print(stock_comment_detail_scrd_desire_daily_em_df)
 
 import akshare as ak
-
-stock_news_main_cx_df = ak.stock_news_main_cx()
-print(stock_news_main_cx_df)
-
 import jieba
 from collections import Counter
 import pandas as pd
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+import matplotlib.font_manager as fm
+
+# 获取财新网股票相关新闻
+stock_news_main_cx_df = ak.stock_news_main_cx()
+print(stock_news_main_cx_df)
 
 # 将新闻标题合并为一个字符串
 news_text = ' '.join(stock_news_main_cx_df['tag'].tolist())
@@ -45,44 +48,50 @@ filtered_words = [word for word in words if word not in stop_words and len(word)
 # 统计词频
 word_counts = Counter(filtered_words)
 
-# 获取前10个高频词
-top_10_words = word_counts.most_common(100)
+# 获取前100个高频词
+top_words = word_counts.most_common(100)
 
 # 转换为DataFrame并打印
-df_words = pd.DataFrame(top_10_words, columns=['词语', '出现次数'])
-print("\n新闻标题中出现频率最高的10个词语:")
+df_words = pd.DataFrame(top_words, columns=['词语', '出现次数'])
+print("\n新闻标题中出现频率最高的词语:")
 print(df_words)
+
 # 将结果保存到CSV文件
 df_words.to_csv("news_word_frequency.csv", index=False, encoding='utf-8-sig')
 print("\n词频统计结果已保存到 news_word_frequency.csv")
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud
+
+# 定义中文字体路径
+font_path = '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc'
 
 # 将词频数据转换为字典格式
-word_freq_dict = dict(zip(df_words['词语'], df_words['出现次数']))
+word_freq_dict = dict(top_words)
 
-# 创建词云对象
-wc = WordCloud(
-    font_path='SimHei',  # 使用黑体字体以正确显示中文
-    width=1200,          # 设置宽度
-    height=800,          # 设置高度
-    background_color='white', # 设置背景颜色
-    max_words=100,       # 最多显示词数
-    max_font_size=150    # 字体最大值
-)
+try:
+    # 创建词云对象
+    wc = WordCloud(
+        font_path=font_path,  # 使用文泉驿微米黑字体
+        width=1200,          
+        height=800,          
+        background_color='white',
+        max_words=100,       
+        max_font_size=150    
+    )
 
-# 生成词云
-wc.generate_from_frequencies(word_freq_dict)
+    # 生成词云
+    wc.generate_from_frequencies(word_freq_dict)
 
-# 创建图表
-plt.figure(figsize=(15,10))
-plt.imshow(wc, interpolation='bilinear')
-plt.axis('off')  # 不显示坐标轴
-plt.title('新闻热词云图', fontsize=20, pad=20, fontproperties='SimHei')
-
-# 保存图片
-plt.savefig('news_wordcloud.png', dpi=300, bbox_inches='tight')
-print("\n词云图已保存为 news_wordcloud.png")
-
-# 显示图片
-plt.show()
+    # 设置matplotlib使用的字体
+    font_prop = fm.FontProperties(fname=font_path)
+    
+    # 创建图表
+    plt.figure(figsize=(15,10))
+    plt.imshow(wc, interpolation='bilinear')
+    plt.axis('off')  # 不显示坐标轴
+    plt.title('新闻热词云图', fontsize=20, pad=20, fontproperties=font_prop)
+    
+    # 保存图片
+    plt.savefig('news_wordcloud.png', dpi=300, bbox_inches='tight')
+    print("\n词云图已保存为 news_wordcloud.png")
+    
+except Exception as e:
+    print(f"\n生成词云图时出错: {e}")
