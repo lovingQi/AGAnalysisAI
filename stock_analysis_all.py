@@ -8,6 +8,7 @@ from tqdm import tqdm
 import time
 import os
 import datetime
+import json
 
 # 设置中文显示
 try:
@@ -184,9 +185,46 @@ def calculate_price_targets(df):
     
     return result
 
+# 新增：历史评分跟踪函数
+def calculate_smoothed_score(current_score, stock_code, history_days=5):
+    """计算平滑后的评分，考虑历史几天的得分情况"""
+    # 从文件读取或初始化历史评分记录
+    history_file = 'results/score_history.json'
+    
+    if os.path.exists(history_file):
+        with open(history_file, 'r') as f:
+            score_history = json.load(f)
+    else:
+        score_history = {}
+        
+    # 初始化该股票的历史记录
+    if stock_code not in score_history:
+        score_history[stock_code] = []
+        
+    # 添加当前分数
+    score_history[stock_code].append(current_score)
+    
+    # 只保留最近N天的记录
+    if len(score_history[stock_code]) > history_days:
+        score_history[stock_code] = score_history[stock_code][-history_days:]
+        
+    # 使用加权平均，越近的得分权重越高
+    weights = [0.1, 0.15, 0.2, 0.25, 0.3][:len(score_history[stock_code])]
+    # 调整权重使总和为1
+    weights = [w/sum(weights) for w in weights]
+    
+    # 计算加权平均分
+    smoothed_score = sum(s*w for s, w in zip(score_history[stock_code], weights))
+    
+    # 保存历史记录
+    with open(history_file, 'w') as f:
+        json.dump(score_history, f)
+        
+    return round(smoothed_score, 1)
+
 # 分析股票的买入信号
 def analyze_buy_signals(df, stock_code, stock_name):
-    """分析股票的买入信号"""
+    """使用连续性评分分析股票的买入信号"""
     signals = []
     score = 0
     
@@ -201,47 +239,39 @@ def analyze_buy_signals(df, stock_code, stock_name):
             return {"code": stock_code, "name": stock_name, "signals": ["数据计算错误"], "score": 0}
     
     try:
-        # 分析中期趋势（过去一个月）
+        # 1. 月度趋势评分 - 连续评分而非二元判断
         month_trend = analyze_monthly_trend(df)
-        if month_trend['is_uptrend']:
-            signals.append(f"过去一个月呈上升趋势: {month_trend['reason']}")
-            score += 15
+        trend_score = month_trend['trend_score']  # 0-15的连续分数
+        if trend_score > 0:
+            signals.append(f"月度趋势评分: {trend_score:.1f}/15 - {month_trend['reason']}")
+            score += trend_score
         
-        # 1. MA5与MA20金叉信号(5日均线上穿20日均线)
-        if df['MA5'].iloc[-1] > df['MA20'].iloc[-1] and df['MA5'].iloc[-2] <= df['MA20'].iloc[-2]:
-            signals.append("MA金叉形成")
-            score += 20
+        # 2. MA金叉 - 加入接近程度评分
+        ma_cross_score = evaluate_ma_cross(df)
+        if ma_cross_score > 0:
+            signals.append(f"MA指标评分: {ma_cross_score:.1f}/20")
+            score += ma_cross_score
         
-        # 2. RSI指标分析
-        current_rsi = df['RSI'].iloc[-1]
-        if 30 <= current_rsi <= 50:
-            signals.append(f"RSI值为{current_rsi:.2f}，处于低位回升阶段")
-            score += 15
-        elif current_rsi < 30:
-            signals.append(f"RSI值为{current_rsi:.2f}，股票可能超卖")
-            score += 10
+        # 3. RSI指标 - 连续评分
+        rsi_score = evaluate_rsi(df)
+        if rsi_score > 0:
+            current_rsi = df['RSI'].iloc[-1]
+            signals.append(f"RSI值为{current_rsi:.2f}，评分: {rsi_score:.1f}/15")
+            score += rsi_score
         
-        # 3. MACD金叉
-        if df['DIF'].iloc[-1] > df['DEA'].iloc[-1] and df['DIF'].iloc[-2] <= df['DEA'].iloc[-2]:
-            # 判断MACD柱状图的强度
-            macd_strength = df['MACD'].iloc[-1]
-            if macd_strength > 0:
-                signals.append(f"MACD金叉形成，柱状图为正 ({macd_strength:.3f})")
-                score += 20
-            else:
-                signals.append("MACD金叉形成")
-                score += 15
+        # 4. MACD - 连续评分
+        macd_score = evaluate_macd(df)
+        if macd_score > 0:
+            signals.append(f"MACD指标评分: {macd_score:.1f}/20")
+            score += macd_score
         
-        # 4. KDJ金叉
-        if df['K'].iloc[-1] > df['D'].iloc[-1] and df['K'].iloc[-2] <= df['D'].iloc[-2]:
-            if df['K'].iloc[-1] < 50:  # K值在低位金叉更有效
-                signals.append("KDJ低位金叉")
-                score += 15
-            else:
-                signals.append("KDJ金叉")
-                score += 10
+        # 5. KDJ - 连续评分
+        kdj_score = evaluate_kdj(df)
+        if kdj_score > 0:
+            signals.append(f"KDJ指标评分: {kdj_score:.1f}/15")
+            score += kdj_score
         
-        # 5. 放量上涨
+        # 6. 放量上涨
         avg_volume = df['成交量'].iloc[-6:-1].mean()  # 前5天平均成交量
         current_volume = df['成交量'].iloc[-1]
         price_change = (df['收盘'].iloc[-1] / df['收盘'].iloc[-2] - 1) * 100
@@ -250,19 +280,25 @@ def analyze_buy_signals(df, stock_code, stock_name):
             signals.append(f"放量上涨: 量比{current_volume/avg_volume:.2f}, 涨幅{price_change:.2f}%")
             score += 15
         
-        # 6. 突破前高
+        # 7. 突破前高
         recent_high = df['最高'].iloc[-20:-1].max()
         if df['收盘'].iloc[-1] > recent_high:
             signals.append("突破20日前高")
             score += 15
         
-        # 7. 多均线多头排列分析（新增）
+        # 8. 多均线多头排列分析（新增）
         if is_bullish_ma_alignment(df):
             signals.append("均线呈多头排列，趋势向上")
             score += 15
             
         # 计算买入价格和止损价格
         price_targets = calculate_price_targets(df)
+        
+        # 最后应用平滑
+        raw_score = score
+        smoothed_score = calculate_smoothed_score(raw_score, stock_code)
+        signals.append(f"原始分数: {raw_score:.1f}, 平滑后分数: {smoothed_score:.1f}")
+        score = smoothed_score
         
     except Exception as e:
         signals.append(f"分析过程出错: {str(e)}")
@@ -278,9 +314,10 @@ def analyze_buy_signals(df, stock_code, stock_name):
 
 # 分析月度趋势
 def analyze_monthly_trend(df):
-    """分析过去一个月的趋势情况"""
+    """分析过去一个月的趋势情况，返回连续性评分"""
     result = {
         'is_uptrend': False,
+        'trend_score': 0,
         'reason': ''
     }
     
@@ -301,16 +338,18 @@ def analyze_monthly_trend(df):
         ma_up = (df['MA5'].iloc[-1] > df['MA5'].iloc[-days//2]) and \
                 (df['MA20'].iloc[-1] > df['MA20'].iloc[-days//2])
         
-        # 综合判断趋势
-        if price_change > 5 and up_ratio > 0.5 and ma_up:
-            result['is_uptrend'] = True
-            result['reason'] = f"月涨幅{price_change:.2f}%, 上涨占比{up_ratio:.2f}, 均线向上"
-        elif price_change > 10:
-            result['is_uptrend'] = True
-            result['reason'] = f"强势上涨{price_change:.2f}%"
-        elif ma_up and up_ratio > 0.6:
-            result['is_uptrend'] = True
-            result['reason'] = f"均线向上, 上涨天数占比{up_ratio:.2f}"
+        # 连续评分系统 - 总分15分
+        price_score = min(7, max(0, price_change) / 2)  # 最高7分，每上涨2%得1分
+        ratio_score = min(4, up_ratio * 6)  # 最高4分
+        ma_score = 4 if ma_up else 0  # 均线向上4分
+        
+        # 总评分
+        trend_score = price_score + ratio_score + ma_score
+        result['trend_score'] = round(trend_score, 1)
+        
+        # 设置理由
+        result['is_uptrend'] = trend_score > 7.5  # 超过一半分数视为上升趋势
+        result['reason'] = f"月涨幅{price_change:.1f}%(得分:{price_score:.1f}), 上涨占比{up_ratio:.2f}(得分:{ratio_score:.1f}), 均线{ma_score}分"
     
     except Exception as e:
         print(f"分析月度趋势出错: {str(e)}")
@@ -333,6 +372,100 @@ def is_bullish_ma_alignment(df):
         return False
     except:
         return False
+
+# MA金叉连续评分
+def evaluate_ma_cross(df):
+    """对MA指标进行连续性评分，满分20分"""
+    score = 0
+    ma5 = df['MA5'].iloc[-1]
+    ma20 = df['MA20'].iloc[-1]
+    ma5_prev = df['MA5'].iloc[-2]
+    ma20_prev = df['MA20'].iloc[-2]
+    
+    # 金叉情况
+    if ma5 > ma20 and ma5_prev <= ma20_prev:
+        score = 20  # 完美金叉
+    elif ma5 > ma20:
+        # 已经金叉，评估维持时间和强度
+        days_above = 0
+        for i in range(-1, -6, -1):
+            if i < -len(df):
+                break
+            if df['MA5'].iloc[i] > df['MA20'].iloc[i]:
+                days_above += 1
+            else:
+                break
+        
+        # 根据维持天数给分
+        strength = (ma5 / ma20 - 1) * 100  # 强度百分比
+        score = min(18, 10 + days_above + min(5, strength))
+    elif ma5_prev < ma20_prev and (ma20 - ma5) / ma20 < 0.01:
+        # 接近金叉
+        proximity = 1 - (ma20 - ma5) / ma20 * 100
+        score = min(15, proximity * 15)
+        
+    return round(score, 1)
+
+# RSI连续评分
+def evaluate_rsi(df):
+    """对RSI指标进行连续性评分，满分15分"""
+    current_rsi = df['RSI'].iloc[-1]
+    score = 0
+    
+    # RSI位于30-70之间为理想区间
+    if 30 <= current_rsi <= 50:
+        # 低位回升区间，线性插值得分
+        score = 15 * (1 - (current_rsi - 30) / 20)  # 30得15分，50得0分
+    elif current_rsi < 30:
+        # 过度超卖区间，随RSI降低而减分
+        score = max(5, 15 * (current_rsi / 30))  # RSI越低分越低，但至少5分
+    
+    # 考虑RSI方向
+    rsi_direction = df['RSI'].iloc[-1] - df['RSI'].iloc[-3]  # 3天方向
+    if rsi_direction > 0 and current_rsi < 50:
+        # 低位上升加分
+        score += min(5, rsi_direction)
+    
+    return round(min(15, score), 1)
+
+# MACD连续评分
+def evaluate_macd(df):
+    """对MACD指标进行连续性评分，满分20分"""
+    score = 0
+    dif = df['DIF'].iloc[-1]
+    dea = df['DEA'].iloc[-1]
+    dif_prev = df['DIF'].iloc[-2]
+    dea_prev = df['DEA'].iloc[-2]
+    macd = df['MACD'].iloc[-1]
+    
+    # 金叉情况
+    if dif > dea and dif_prev <= dea_prev:
+        # 完美金叉
+        base_score = 15
+        # 根据MACD柱状图强度加分
+        if macd > 0:
+            base_score += min(5, macd * 10)  # 柱状图强度加分
+        score = base_score
+    elif dif > dea:
+        # 已经金叉，评估维持时间
+        days_above = 0
+        for i in range(-1, -6, -1):
+            if i < -len(df):
+                break
+            if df['DIF'].iloc[i] > df['DEA'].iloc[i]:
+                days_above += 1
+            else:
+                break
+                
+        # 根据维持天数和强度评分
+        strength = min(5, macd * 10) if macd > 0 else 0
+        score = min(18, 10 + days_above/2 + strength)
+    elif dif_prev < dea_prev and (dea - dif) / abs(dea) < 0.05:
+        # 即将金叉
+        proximity = (1 - (dea - dif) / abs(dea) * 20) * 10
+        score = min(12, proximity)
+    
+    return round(score, 1)
 
 # 获取并分析单只股票数据
 def analyze_single_stock(stock_code, stock_name, trade_days=30, end_date=None):
@@ -519,7 +652,7 @@ def main():
                 results.append(result)
             
             # 防止频繁请求被限制
-            time.sleep(0.01)  # 减少延时时间，加快分析速度
+            time.sleep(0.1)  # 减少延时时间，加快分析速度
             
         except Exception as e:
             print(f"处理股票时出错: {str(e)}")
